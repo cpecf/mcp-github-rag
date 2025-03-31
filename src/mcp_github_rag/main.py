@@ -14,16 +14,14 @@ mcp = FastMCP(
     dependencies=[
         "gitpython",
         "llama-index",
-        "ollama",
         "pandas",
         "huggingface-hub",
         "transformers"
     ]
 )
 
-# Cache for repositories and query engines
+# Cache for repositories and processed data
 REPO_CACHE = {}
-QUERY_ENGINE_CACHE = {}
 
 def clone_repo(repo_url: str) -> str:
     """Clone a repository and return the path. If repository is already cloned in temp directory, reuse it."""
@@ -72,70 +70,6 @@ def process_repository(repo_url: str) -> dict:
     # Cache the result
     REPO_CACHE[repo_hash] = result
     return result
-
-def get_query_engine(repo_url: str) -> object:
-    """Get or create a query engine for a repository."""
-    from llama_index.core import Settings
-    from llama_index.llms.ollama import Ollama
-    from llama_index.core import PromptTemplate
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-    from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
-    from llama_index.core.node_parser import MarkdownNodeParser
-    
-    # Check if the query engine is already created
-    repo_hash = hashlib.sha256(repo_url.encode()).hexdigest()[:12]
-    if repo_hash in QUERY_ENGINE_CACHE:
-        return QUERY_ENGINE_CACHE[repo_hash]
-    
-    # Create a temporary directory
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Process repository
-        repo_data = process_repository(repo_url)
-        content = repo_data["content"]
-        repo_name = repo_url.split('/')[-1]
-        
-        # Write content to a markdown file in temp directory
-        content_path = os.path.join(temp_dir, f"{repo_name}_content.md")
-        with open(content_path, "w", encoding="utf-8") as f:
-            f.write(content)
-            
-        # Load the documents
-        loader = SimpleDirectoryReader(input_dir=temp_dir)
-        docs = loader.load_data()
-        
-        # Setup LLM & embedding model
-        llm = Ollama(model="llama3.2", request_timeout=120.0)
-        embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-large-en-v1.5", trust_remote_code=True)
-        
-        # Create an index over loaded data
-        Settings.embed_model = embed_model
-        node_parser = MarkdownNodeParser()
-        index = VectorStoreIndex.from_documents(documents=docs, transformations=[node_parser], show_progress=True)
-        
-        # Create the query engine
-        Settings.llm = llm
-        query_engine = index.as_query_engine(streaming=False)  # Note: streaming not used in MCP
-        
-        # Customize prompt template
-        qa_prompt_tmpl_str = (
-            "Context information is below.\n"
-            "---------------------\n"
-            "{context_str}\n"
-            "---------------------\n"
-            "Given the context information above I want you to think step by step to answer the query in a highly precise "
-            "and crisp manner focused on the final answer, incase case you don't know the answer say 'I don't know!'.\n"
-            "Query: {query_str}\n"
-            "Answer: "
-        )
-        qa_prompt_tmpl = PromptTemplate(qa_prompt_tmpl_str)
-        
-        query_engine.update_prompts(
-            {"response_synthesizer:text_qa_template": qa_prompt_tmpl}
-        )
-        
-        # Cache the query engine
-        QUERY_ENGINE_CACHE[repo_hash] = query_engine
-        return query_engine
 
 @mcp.tool()
 def github_repository_summary(repo_url: str) -> str:
@@ -201,27 +135,76 @@ def ask_github_repository(repo_url: str, question: str) -> str:
         An answer to the question based on the repository content
     """
     try:
-        # Get or create the query engine
-        query_engine = get_query_engine(repo_url)
+        from llama_index.core import Settings, VectorStoreIndex, SimpleDirectoryReader, PromptTemplate
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+        from llama_index.core.node_parser import MarkdownNodeParser
         
-        # Query the engine
-        response = query_engine.query(question)
+        # Process repository
+        repo_data = process_repository(repo_url)
+        content = repo_data["content"]
+        repo_name = repo_url.split('/')[-1]
         
-        # Return the response
-        return str(response)
+        # Create a temporary directory for the content
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Write content to a markdown file in temp directory
+            content_path = os.path.join(temp_dir, f"{repo_name}_content.md")
+            with open(content_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                
+            # Load the documents
+            loader = SimpleDirectoryReader(input_dir=temp_dir)
+            docs = loader.load_data()
+            
+            # Setup embedding model
+            embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-large-en-v1.5", trust_remote_code=True)
+            
+            # Create an index over loaded data
+            Settings.embed_model = embed_model
+            node_parser = MarkdownNodeParser()
+            index = VectorStoreIndex.from_documents(documents=docs, transformations=[node_parser])
+            
+            # Create the query engine
+            query_engine = index.as_query_engine()
+            
+            # Customize prompt template
+            qa_prompt_tmpl_str = (
+                "Context information is below.\n"
+                "---------------------\n"
+                "{context_str}\n"
+                "---------------------\n"
+                "Given the context information above I want you to think step by step to answer the query in a highly precise "
+                "and crisp manner focused on the final answer, incase case you don't know the answer say 'I don't know!'.\n"
+                "Query: {query_str}\n"
+                "Answer: "
+            )
+            qa_prompt_tmpl = PromptTemplate(qa_prompt_tmpl_str)
+            
+            query_engine.update_prompts(
+                {"response_synthesizer:text_qa_template": qa_prompt_tmpl}
+            )
+            
+            # Query the engine
+            response = query_engine.query(question)
+            
+            # Return the response
+            return str(response)
     except Exception as e:
         return f"Error querying repository: {str(e)}"
 
 @mcp.tool()
 def clear_repository_cache() -> str:
     """
-    Clear the repository and query engine cache.
+    Clear the repository cache.
     
     Returns:
         A confirmation message
     """
-    global REPO_CACHE, QUERY_ENGINE_CACHE
+    global REPO_CACHE
     REPO_CACHE = {}
-    QUERY_ENGINE_CACHE = {}
     gc.collect()
     return "Repository cache cleared successfully."
+
+if __name__ == "__main__":
+    # Initialize and run the server
+    mcp.run(transport='stdio')
+    # mcp.run(transport='http', host="0.0.0.0", port=8000)

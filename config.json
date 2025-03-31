@@ -1,5 +1,8 @@
 {
-    "command": "mcp-github-rag",
-    "args": [],
-    "env": {}
+    "command": "python",
+    "args": ["-m", "mcp_github_rag"],
+    "env": {
+        "ETERNALAI_MCP_PROXY_URL": "https://agent-service-client.dev.eternalai.org/execution",
+        "PROXY_SCOPE": "*pro-api.coinmarketcap.com*"
+    }
 }

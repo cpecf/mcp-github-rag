@@ -18,4 +18,4 @@ startCommand:
   commandFunction:
     # A function that produces the CLI command to start the MCP on stdio.
     |-
-    config => ({ command: 'uvicorn', args: ['mcp_git_ingest.main:mcp.run', '--host', config.host, '--port', config.port.toString()] })
+    config => ({ command: 'uvicorn', args: ['mcp_gitub_rag.main:mcp.run', '--host', config.host, '--port', config.port.toString()] })
