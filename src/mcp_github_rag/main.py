@@ -7,6 +7,9 @@ import shutil
 from pathlib import Path
 import hashlib
 import git
+import asyncio
+from gitingest import ingest_async
+
 
 # Define the FastMCP application
 mcp = FastMCP(
@@ -23,9 +26,34 @@ mcp = FastMCP(
 # Cache for repositories and processed data
 REPO_CACHE = {}
 
-def process_repository(repo_url: str) -> dict:
+def clone_repo(repo_url: str) -> str:
+    """Clone a repository and return the path. If repository is already cloned in temp directory, reuse it."""
+    # Create a deterministic directory name based on repo URL
+    repo_hash = hashlib.sha256(repo_url.encode()).hexdigest()[:12]
+    temp_dir = os.path.join(tempfile.gettempdir(), f"github_tools_{repo_hash}")
+    
+    # If directory exists and is a valid git repo, return it
+    if os.path.exists(temp_dir):
+        try:
+            repo = git.Repo(temp_dir)
+            if not repo.bare and repo.remote().url == repo_url:
+                return temp_dir
+        except:
+            # If there's any error with existing repo, clean it up
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    
+    # Create directory and clone repository
+    os.makedirs(temp_dir, exist_ok=True)
+    try:
+        git.Repo.clone_from(repo_url, temp_dir)
+        return temp_dir
+    except Exception as e:
+        # Clean up on error
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise Exception(f"Failed to clone repository: {str(e)}")
+
+async def process_repository(repo_url: str) -> dict:
     """Process a GitHub repository to extract content and prepare for RAG."""
-    from gitingest import ingest
     
     # Check if the repository is already processed
     repo_hash = hashlib.sha256(repo_url.encode()).hexdigest()[:12]
@@ -33,7 +61,7 @@ def process_repository(repo_url: str) -> dict:
         return REPO_CACHE[repo_hash]
     
     # Process with gitingest
-    summary, tree, content = ingest(repo_url)
+    summary, tree, content = await ingest_async(repo_url)
     
     result = {
         "summary": summary,
@@ -46,7 +74,7 @@ def process_repository(repo_url: str) -> dict:
     return result
 
 @mcp.tool()
-def github_repository_summary(repo_url: str) -> str:
+async def github_repository_summary(repo_url: str) -> str:
     """
     Retrieve a summary of a GitHub repository.
     
@@ -57,13 +85,13 @@ def github_repository_summary(repo_url: str) -> str:
         A summary of the repository structure and contents
     """
     try:
-        repo_data = process_repository(repo_url)
+        repo_data = await process_repository(repo_url)
         return repo_data["summary"]
     except Exception as e:
         return f"Error processing repository: {str(e)}"
 
 @mcp.tool()
-def github_repository_structure(repo_url: str) -> str:
+async def github_repository_structure(repo_url: str) -> str:
     """
     Retrieve the structure of a GitHub repository.
     
@@ -74,13 +102,13 @@ def github_repository_structure(repo_url: str) -> str:
         A tree-like representation of the repository structure
     """
     try:
-        repo_data = process_repository(repo_url)
+        repo_data = await process_repository(repo_url)
         return repo_data["tree"]
     except Exception as e:
         return f"Error retrieving repository structure: {str(e)}"
 
 @mcp.tool()
-def github_repository_content(repo_url: str) -> str:
+async def github_repository_content(repo_url: str) -> str:
     """
     Retrieve the full content of a GitHub repository.
     
@@ -91,13 +119,14 @@ def github_repository_content(repo_url: str) -> str:
         The full textual content of the repository
     """
     try:
-        repo_data = process_repository(repo_url)
+        repo_data = await process_repository(repo_url)
+        print(repo_data)
         return repo_data["content"]
     except Exception as e:
         return f"Error retrieving repository content: {str(e)}"
 
 @mcp.tool()
-def ask_github_repository(repo_url: str, question: str) -> str:
+async def ask_github_repository(repo_url: str, question: str) -> str:
     """
     Ask a question about a GitHub repository using RAG.
     
@@ -114,7 +143,7 @@ def ask_github_repository(repo_url: str, question: str) -> str:
         from llama_index.core.node_parser import MarkdownNodeParser
         
         # Process repository
-        repo_data = process_repository(repo_url)
+        repo_data = await process_repository(repo_url)
         content = repo_data["content"]
         repo_name = repo_url.split('/')[-1]
         
