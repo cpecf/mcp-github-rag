@@ -120,7 +120,6 @@ async def github_repository_content(repo_url: str) -> str:
     """
     try:
         repo_data = await process_repository(repo_url)
-        print(repo_data)
         return repo_data["content"]
     except Exception as e:
         return f"Error retrieving repository content: {str(e)}"
@@ -145,6 +144,7 @@ async def ask_github_repository(repo_url: str, question: str) -> str:
         # Process repository
         repo_data = await process_repository(repo_url)
         content = repo_data["content"]
+        print(content)
         repo_name = repo_url.split('/')[-1]
         
         # Create a temporary directory for the content
