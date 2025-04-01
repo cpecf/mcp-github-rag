@@ -23,32 +23,6 @@ mcp = FastMCP(
 # Cache for repositories and processed data
 REPO_CACHE = {}
 
-def clone_repo(repo_url: str) -> str:
-    """Clone a repository and return the path. If repository is already cloned in temp directory, reuse it."""
-    # Create a deterministic directory name based on repo URL
-    repo_hash = hashlib.sha256(repo_url.encode()).hexdigest()[:12]
-    temp_dir = os.path.join(tempfile.gettempdir(), f"github_rag_{repo_hash}")
-    
-    # If directory exists and is a valid git repo, return it
-    if os.path.exists(temp_dir):
-        try:
-            repo = git.Repo(temp_dir)
-            if not repo.bare and repo.remote().url == repo_url:
-                return temp_dir
-        except:
-            # If there's any error with existing repo, clean it up
-            shutil.rmtree(temp_dir, ignore_errors=True)
-    
-    # Create directory and clone repository
-    os.makedirs(temp_dir, exist_ok=True)
-    try:
-        git.Repo.clone_from(repo_url, temp_dir)
-        return temp_dir
-    except Exception as e:
-        # Clean up on error
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise Exception(f"Failed to clone repository: {str(e)}")
-
 def process_repository(repo_url: str) -> dict:
     """Process a GitHub repository to extract content and prepare for RAG."""
     from gitingest import ingest
@@ -156,10 +130,10 @@ def ask_github_repository(repo_url: str, question: str) -> str:
             docs = loader.load_data()
             
             # Setup embedding model
-            embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-large-en-v1.5", trust_remote_code=True)
+            # embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-large-en-v1.5", trust_remote_code=True)
             
             # Create an index over loaded data
-            Settings.embed_model = embed_model
+            # Settings.embed_model = embed_model
             node_parser = MarkdownNodeParser()
             index = VectorStoreIndex.from_documents(documents=docs, transformations=[node_parser])
             
